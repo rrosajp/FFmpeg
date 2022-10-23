@@ -48,9 +48,7 @@ class Operand(object):
             self.used_count = self.used_count + 1
 
     def __str__(self):
-        return "{}: (name: {}, iotype: {}, dtype: {}, dims: {}, used_count: {})".format(self.index,
-                            self.name, self.iotype2str[self.iotype], self.dtype2str[self.dtype],
-                            self.dims, self.used_count)
+        return f"{self.index}: (name: {self.name}, iotype: {self.iotype2str[self.iotype]}, dtype: {self.dtype2str[self.dtype]}, dims: {self.dims}, used_count: {self.used_count})"
 
     def __lt__(self, other):
         return self.index < other.index
@@ -85,8 +83,8 @@ class TFConverter:
 
 
     def add_operand(self, name, type):
-        node = self.name_node_dict[name]
         if name not in self.name_operand_dict:
+            node = self.name_node_dict[name]
             dtype = node.attr['dtype'].type
             if dtype == 0:
                 dtype = node.attr['T'].type
@@ -110,18 +108,18 @@ class TFConverter:
 
 
     def get_conv2d_params(self, conv2d_scope_name):
-        knode = self.name_node_dict[conv2d_scope_name + '/kernel']
-        bnode = self.name_node_dict[conv2d_scope_name + '/bias']
+        knode = self.name_node_dict[f'{conv2d_scope_name}/kernel']
+        bnode = self.name_node_dict[f'{conv2d_scope_name}/bias']
 
-        if conv2d_scope_name + '/dilation_rate' in self.name_node_dict:
-            dnode = self.name_node_dict[conv2d_scope_name + '/dilation_rate']
+        if f'{conv2d_scope_name}/dilation_rate' in self.name_node_dict:
+            dnode = self.name_node_dict[f'{conv2d_scope_name}/dilation_rate']
         else:
             dnode = None
 
         # the BiasAdd name is possible be changed into the output name,
         # if activation is None, and BiasAdd.next is the last op which is Identity
-        if conv2d_scope_name + '/BiasAdd' in self.edges:
-            anode = self.edges[conv2d_scope_name + '/BiasAdd'][0]
+        if f'{conv2d_scope_name}/BiasAdd' in self.edges:
+            anode = self.edges[f'{conv2d_scope_name}/BiasAdd'][0]
             if anode.op not in self.conv_activations:
                 anode = None
         else:
@@ -130,14 +128,14 @@ class TFConverter:
 
 
     def get_dense_params(self, dense_scope_name):
-        knode = self.name_node_dict[dense_scope_name + '/kernel']
-        bnode = self.name_node_dict.get(dense_scope_name + '/bias')
+        knode = self.name_node_dict[f'{dense_scope_name}/kernel']
+        bnode = self.name_node_dict.get(f'{dense_scope_name}/bias')
         # the BiasAdd name is possible be changed into the output name,
         # if activation is None, and BiasAdd.next is the last op which is Identity
         anode = None
         if bnode:
-            if dense_scope_name + '/BiasAdd' in self.edges:
-                anode = self.edges[dense_scope_name + '/BiasAdd'][0]
+            if f'{dense_scope_name}/BiasAdd' in self.edges:
+                anode = self.edges[f'{dense_scope_name}/BiasAdd'][0]
                 if anode.op not in self.conv_activations:
                     anode = None
         else:
@@ -155,20 +153,19 @@ class TFConverter:
         knode, bnode, dnode, anode = self.get_conv2d_params(scope_name)
 
         if dnode is not None:
-            dilation = struct.unpack('i', dnode.attr['value'].tensor.tensor_content[0:4])[0]
+            dilation = struct.unpack('i', dnode.attr['value'].tensor.tensor_content[:4])[0]
         else:
             dilation = 1
 
-        if anode is not None:
-            activation = anode.op
-        else:
-            activation = 'None'
-
+        activation = anode.op if anode is not None else 'None'
         padding = node.attr['padding'].s.decode("utf-8")
         # conv2d with dilation > 1 generates tens of nodes, not easy to parse them, so use this tricky method.
-        if dilation > 1 and scope_name + '/stack' in self.name_node_dict:
-            if self.name_node_dict[scope_name + '/stack'].op == "Const":
-                padding = 'SAME'
+        if (
+            dilation > 1
+            and f'{scope_name}/stack' in self.name_node_dict
+            and self.name_node_dict[f'{scope_name}/stack'].op == "Const"
+        ):
+            padding = 'SAME'
         padding = self.conv_paddings[padding]
 
         ktensor = knode.attr['value'].tensor
@@ -219,11 +216,7 @@ class TFConverter:
         else:
             has_bias = 0
 
-        if anode is not None:
-            activation = anode.op
-        else:
-            activation = 'None'
-
+        activation = anode.op if anode is not None else 'None'
         ktensor = knode.attr['value'].tensor
         in_channels = ktensor.tensor_shape.dim[0].size
         out_channels = ktensor.tensor_shape.dim[1].size
@@ -244,11 +237,13 @@ class TFConverter:
 
         if anode is not None:
             output_operand_index = self.add_operand(anode.name, Operand.IOTYPE_OUTPUT)
+        elif bnode is None:
+            output_operand_index = self.add_operand(
+                self.edges[f'{scope_name}/concat_1'][0].name, Operand.IOTYPE_OUTPUT
+            )
+
         else:
-            if bnode is not None:
-                output_operand_index = self.add_operand(self.edges[bnode.name][0].name, Operand.IOTYPE_OUTPUT)
-            else:
-                output_operand_index = self.add_operand(self.edges[scope_name+'/concat_1'][0].name, Operand.IOTYPE_OUTPUT)
+            output_operand_index = self.add_operand(self.edges[bnode.name][0].name, Operand.IOTYPE_OUTPUT)
         np.array([input_operand_index, output_operand_index], dtype=np.uint32).tofile(f)
 
 
@@ -467,9 +462,7 @@ class TFConverter:
     def generate_output_names(self):
         used_names = []
         for node in self.nodes:
-            for input in node.input:
-                used_names.append(input)
-
+            used_names.extend(iter(node.input))
         for node in self.nodes:
             if node.name not in used_names:
                 self.output_names.append(node.name)
@@ -515,9 +508,7 @@ class TFConverter:
     @staticmethod
     def get_scope_name(name):
         index = name.rfind('/')
-        if index == -1:
-            return ""
-        return name[0:index]
+        return "" if index == -1 else name[:index]
 
 
     def in_conv2d_scope(self, name):
@@ -550,7 +541,7 @@ class TFConverter:
                 if scope == '':
                     continue
                 # for the case tf.nn.conv2d is called within a scope
-                if scope + '/kernel' not in self.name_node_dict:
+                if f'{scope}/kernel' not in self.name_node_dict:
                     continue
                 self.conv2d_scope_names.add(scope)
             elif node.op == 'MatMul':
@@ -559,7 +550,11 @@ class TFConverter:
                 if scope == '':
                     continue
                 # for the case tf.nn.dense is called within a scope
-                if scope + '/kernel' not in self.name_node_dict and scope.split('/Tensordot')[0] + '/kernel' not in self.name_node_dict:
+                if (
+                    f'{scope}/kernel' not in self.name_node_dict
+                    and scope.split('/Tensordot')[0] + '/kernel'
+                    not in self.name_node_dict
+                ):
                     continue
                 self.dense_scope_names.add(scope.split('/Tensordot')[0])
 
@@ -567,12 +562,12 @@ class TFConverter:
         for node in self.nodes:
             scope = TFConverter.get_scope_name(node.name)
             if scope in self.conv2d_scope_names:
-                if node.op == 'Conv2D' or node.op == 'Shape':
+                if node.op in ['Conv2D', 'Shape']:
                     for inp in node.input:
                         if TFConverter.get_scope_name(inp) != scope:
                             self.conv2d_scopename_inputname_dict[scope] = inp
             elif scope in self.dense_scope_names:
-                if node.op == 'MatMul' or node.op == 'Shape':
+                if node.op in ['MatMul', 'Shape']:
                     for inp in node.input:
                         if TFConverter.get_scope_name(inp) != scope:
                             self.dense_scopename_inputname_dict[scope] = inp

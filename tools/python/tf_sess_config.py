@@ -42,4 +42,4 @@ s = config.SerializeToString()
 
 print('a serialized protobuf string for TF_SetConfig, note the byte order is in normal order.')
 b = ''.join(format(b,'02x') for b in s)
-print('0x%s' % b) # print by hex format
+print(f'0x{b}')
